@@ -255,7 +255,7 @@ vips_foreign_save_webp_pic_init(VipsForeignSaveWebp *webp, WebPPicture *pic)
 	pic->writer = WebPMemoryWrite;
 	pic->custom_ptr = (void *) &webp->memory_writer;
 	pic->progress_hook = vips_foreign_save_webp_progress_hook;
-	pic->user_data = (void *) save->in;
+	pic->user_data = (void *) save->ready;
 
 	/* Smart subsampling needs use_argb because it is applied during
 	 * RGB to YUV conversion.
@@ -975,8 +975,10 @@ vips_foreign_save_webp_target_build(VipsObject *object)
 	VipsForeignSaveWebp *webp = (VipsForeignSaveWebp *) object;
 	VipsForeignSaveWebpTarget *target = (VipsForeignSaveWebpTarget *) object;
 
-	webp->target = target->target;
-	g_object_ref(webp->target);
+	if (target->target) {
+		webp->target = target->target;
+		g_object_ref(webp->target);
+	}
 
 	return VIPS_OBJECT_CLASS(vips_foreign_save_webp_target_parent_class)
 		->build(object);
@@ -1024,7 +1026,8 @@ vips_foreign_save_webp_file_build(VipsObject *object)
 	VipsForeignSaveWebp *webp = (VipsForeignSaveWebp *) object;
 	VipsForeignSaveWebpFile *file = (VipsForeignSaveWebpFile *) object;
 
-	if (!(webp->target = vips_target_new_to_file(file->filename)))
+	if (file->filename &&
+		!(webp->target = vips_target_new_to_file(file->filename)))
 		return -1;
 
 	return VIPS_OBJECT_CLASS(vips_foreign_save_webp_file_parent_class)

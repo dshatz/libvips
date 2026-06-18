@@ -234,9 +234,27 @@ cmake \
 cmake --build . --target install
 popd
 
+TSAN_ARGS=""
+if [ "$SANITIZER" = "undefined" ]; then
+  # Allow UBSan shift errors to be recoverable to ensure our suppression rules
+  # are enforced. OSS-Fuzz uses `-fno-sanitize-recover=shift` by default.
+  #export CFLAGS+=" -fsanitize-recover=shift"
+  #export CXXFLAGS+=" -fsanitize-recover=shift"
+  # FIXME: Once PR https://github.com/llvm/llvm-project/pull/194862 is merged
+  # and available in OSS-Fuzz we can re-enable the above flags instead.
+  export CFLAGS+=" -fsanitize-ignorelist=$PWD/suppressions/ubsan_ignorelist.txt"
+  export CXXFLAGS+=" -fsanitize-ignorelist=$PWD/suppressions/ubsan_ignorelist.txt"
+elif [ "$SANITIZER" = "thread" ]; then
+  # TSan may report false positives when callbacks cross boundaries between
+  # instrumented and non-instrumented code. To avoid this, built GLib with
+  # TSan instrumentation as well.
+  # https://github.com/google/sanitizers/wiki/threadsanitizercppmanual#non-instrumented-code
+  TSAN_ARGS="--force-fallback-for=glib -Dglib:glib_debug=disabled -Dglib:nls=disabled -Dglib:sysprof=disabled -Dglib:tests=false"
+fi
+
 # libvips
 # Disable building man pages, gettext po files, tools, and tests
-meson setup build --prefix=$WORK --libdir=lib --prefer-static --default-library=static --buildtype=debug \
+meson setup build --prefix=$WORK --libdir=lib --prefer-static --default-library=static --buildtype=debug $TSAN_ARGS \
   -Dbackend_max_links=4 -Dexamples=false -Dman=false -Dpo=false \
   -Dtests=false -Dtools=false -Dcplusplus=false -Dmodules=disabled -Dfuzz=true \
   -Dfuzzing_engine=oss-fuzz -Dfuzzer_ldflags="$LIB_FUZZING_ENGINE" \
@@ -250,15 +268,16 @@ find build/fuzz -maxdepth 1 -executable -type f -exec cp -v '{}' $OUT \;
 mkdir -p $OUT/lib
 cp $WORK/lib/*.so $OUT/lib
 
-# Merge the seed corpus in a single directory, exclude files larger than 4k
-mkdir -p fuzz/corpus
-find \
-  $SRC/afl-testcases/{gif*,jpeg*,png,tiff,webp}/full/images \
-  fuzz/*_fuzzer_corpus \
-  test/test-suite/images \
-  -type f -size -4k \
-  -exec bash -c 'hash=($(sha1sum {})); mv {} fuzz/corpus/$hash' \;
-zip -jrq $OUT/seed_corpus.zip fuzz/corpus
+pushd $SRC/seed-corpora
+zip -rq $OUT/seed_corpus.zip \
+  afl-testcases/{gif*,jpeg*,png,tiff,webp} \
+  common \
+  vips
+popd
+
+# Merge the test images in the seed corpus, exclude files larger than 4k
+find test/test-suite/images -type f -size -4k | \
+  zip -r -@ $OUT/seed_corpus.zip
 
 # Link corpus
 for fuzzer in $OUT/*_fuzzer; do

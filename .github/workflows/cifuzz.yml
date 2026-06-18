@@ -1,5 +1,17 @@
 name: CIFuzz
-on: [pull_request]
+on:
+  pull_request:
+    paths-ignore:
+      - 'completions/**'
+      - 'cplusplus/**'
+      - 'doc/**'
+      - 'examples/**'
+      - 'man/**'
+      - 'po/**'
+      - 'test/**'
+      - 'tools/**'
+      - 'ChangeLog'
+      - '**.md'
 permissions: {}
 jobs:
   Fuzzing:
@@ -7,8 +19,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        sanitizer: [address, undefined]
+        # Note: MSan requires all libraries to be built from source, see:
+        # https://github.com/google/oss-fuzz/issues/6294
+        sanitizer: [address, undefined, thread]
     steps:
+    # https://github.com/google/oss-fuzz/pull/15235
+    - name: Fix TSan on CIFuzz
+      if: matrix.sanitizer == 'thread'
+      run: echo "CIFUZZ_TEST=1" >> $GITHUB_ENV
     - name: Build Fuzzers
       id: build
       uses: google/oss-fuzz/infra/cifuzz/actions/build_fuzzers@master
@@ -22,7 +40,7 @@ jobs:
         sanitizer: ${{ matrix.sanitizer }}
         fuzz-seconds: 600
     - name: Upload Crash
-      uses: actions/upload-artifact@v6
+      uses: actions/upload-artifact@v7
       if: failure() && steps.build.outcome == 'success'
       with:
         name: artifacts-${{ matrix.sanitizer }}

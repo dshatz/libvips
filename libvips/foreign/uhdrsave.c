@@ -201,7 +201,7 @@ vips_foreign_save_uhdr_set_raw_hdr(VipsForeignSaveUhdr *uhdr, VipsImage *image)
 		.w = image->Xsize,
 		.h = image->Ysize,
 		.planes[0] = (void *)
-			VIPS_ARRAY(uhdr, image->Xsize * image->Ysize * 8, VipsPel),
+			VIPS_ARRAY(uhdr, 8 * VIPS_IMAGE_N_PELS(image), VipsPel),
 		.stride[0] = image->Xsize,
 	};
 	if (!hdr_image.planes[0])
@@ -524,6 +524,16 @@ vips_foreign_save_uhdr_build(VipsObject *object)
 
 		// fix bands, format, etc.
 		if (vips_colourspace(image, &x, VIPS_INTERPRETATION_scRGB, NULL)) {
+			VIPS_UNREF(image);
+			return -1;
+		}
+		VIPS_UNREF(image);
+		image = x;
+
+		/* Rescale from scRGB (1.0 = 80 nits) to libuhdr's UHDR_CT_LINEAR
+		 * convention (1.0 = 203 nits, the ITU-R BT.2408 reference white).
+		 */
+		if (vips_linear1(image, &x, 1.0 / VIPS_UHDR_TO_SCRGB, 0.0, NULL)) {
 			VIPS_UNREF(image);
 			return -1;
 		}

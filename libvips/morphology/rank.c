@@ -119,6 +119,7 @@ vips_rank_stop(void *vseq, void *a, void *b)
 		for (int i = 0; i < in->Bands; i++)
 			VIPS_FREE(seq->hist[i]);
 	VIPS_FREE(seq->hist);
+	VIPS_FREE(seq);
 
 	return 0;
 }
@@ -130,7 +131,7 @@ vips_rank_start(VipsImage *out, void *a, void *b)
 	VipsRank *rank = (VipsRank *) b;
 	VipsRankSequence *seq;
 
-	if (!(seq = VIPS_NEW(out, VipsRankSequence)))
+	if (!(seq = VIPS_NEW(NULL, VipsRankSequence)))
 		return NULL;
 	seq->ir = NULL;
 	seq->sort = NULL;
@@ -434,7 +435,7 @@ vips_rank_generate(VipsRegion *out_region,
 	 * than the section of the output image we are producing.
 	 */
 	s = *r;
-	s.width += rank->width - 1;
+	s.width += rank->width;
 	s.height += rank->height - 1;
 	if (vips_region_prepare(ir, &s))
 		return -1;
@@ -505,7 +506,7 @@ vips_rank_build(VipsObject *object)
 	 */
 	if (vips_embed(in, &t[1],
 			rank->width / 2, rank->height / 2,
-			in->Xsize + rank->width - 1, in->Ysize + rank->height - 1,
+			in->Xsize + rank->width, in->Ysize + rank->height - 1,
 			"extend", VIPS_EXTEND_COPY,
 			NULL))
 		return -1;
@@ -519,7 +520,7 @@ vips_rank_build(VipsObject *object)
 	if (vips_image_pipelinev(rank->out,
 			VIPS_DEMAND_STYLE_FATSTRIP, in, NULL))
 		return -1;
-	rank->out->Xsize -= rank->width - 1;
+	rank->out->Xsize -= rank->width;
 	rank->out->Ysize -= rank->height - 1;
 
 	if (vips_image_generate(rank->out,

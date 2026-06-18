@@ -1376,7 +1376,7 @@ image_strip_work(VipsThreadState *state, void *a)
 	/* killed is checked by sink_disc, but that's only once per strip, and
 	 * they can be huge. Check per output tile as well.
 	 */
-	if (vips_image_iskilled(save->in))
+	if (vips_image_iskilled(save->ready))
 		return -1;
 
 	/* We may be outside the real pixels.
@@ -1605,7 +1605,7 @@ direct_strip_work(VipsThreadState *state, void *a)
 	/* killed is checked by sink_disc, but that's only once per strip, and
 	 * they can be huge. Check per output tile as well.
 	 */
-	if (vips_image_iskilled(save->in))
+	if (vips_image_iskilled(save->ready))
 		return -1;
 
 	/* We may be outside the real pixels.
@@ -2627,8 +2627,10 @@ vips_foreign_save_dz_target_build(VipsObject *object)
 	VipsForeignSaveDz *dz = (VipsForeignSaveDz *) object;
 	VipsForeignSaveDzTarget *target = (VipsForeignSaveDzTarget *) object;
 
-	dz->target = target->target;
-	g_object_ref(dz->target);
+	if (target->target) {
+		dz->target = target->target;
+		g_object_ref(dz->target);
+	}
 
 	return VIPS_OBJECT_CLASS(vips_foreign_save_dz_target_parent_class)
 		->build(object);

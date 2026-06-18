@@ -2,6 +2,8 @@
  *
  * 15/8/25 dvdkon
  *	- handle image rotation
+ * 15/6/26
+ *	- add half_size
  */
 
 /*
@@ -66,6 +68,7 @@ typedef struct _VipsForeignLoadDcRaw {
 	VipsForeignLoad parent_object;
 
 	int bitdepth;
+	gboolean half_size;
 
 	/* LibRaw processor.
 	 */
@@ -118,6 +121,68 @@ vips_foreign_load_dcraw_close(VipsImage *image,
 	libraw_processed_image_t *processed)
 {
 	VIPS_FREEF(libraw_dcraw_clear_mem, processed);
+}
+
+static int
+vips_foreign_load_dcraw_open(VipsForeignLoadDcRaw *raw)
+{
+	VipsObjectClass *class = VIPS_OBJECT_GET_CLASS(raw);
+
+	int result;
+
+	VIPS_FREEF(libraw_close, raw->raw_processor);
+
+	raw->raw_processor = libraw_init(0);
+	if (!raw->raw_processor) {
+		vips_error(class->nickname, "%s", _("unable to initialize libraw"));
+		return -1;
+	}
+
+	if (raw->bitdepth != 8 &&
+		raw->bitdepth != 16) {
+		vips_error(class->nickname, "%s", _("bad bitdepth"));
+		return -1;
+	}
+	raw->raw_processor->params.output_bps = raw->bitdepth;
+
+	/* Fast half-size decoding.
+	 */
+	raw->raw_processor->params.half_size = raw->half_size;
+
+	/* Apply camera white balance.
+	 */
+	raw->raw_processor->params.use_camera_wb = 1;
+
+	/* Don't autorotate, we set EXIF rotation later instead. If we enable
+	 * autorotate, then the image size reported during libraw_open_buffer()
+	 * may not match the decoded size.
+	 */
+	raw->raw_processor->params.user_flip = 0;
+
+	/* We can use the libraw file interface for filename sources. This
+	 * interface can often read more metadata, since it can open secondary
+	 * files.
+	 */
+	if (vips_source_is_file(raw->source)) {
+		const char *filename =
+			vips_connection_filename(VIPS_CONNECTION(raw->source));
+
+		result = libraw_open_file(raw->raw_processor, filename);
+	}
+	else {
+		size_t length;
+		const void *data;
+
+		if (!(data = vips_source_map(raw->source, &length)))
+			return -1;
+		result = libraw_open_buffer(raw->raw_processor, data, length);
+	}
+	if (result != LIBRAW_SUCCESS) {
+		vips_foreign_load_dcraw_error(raw, _("unable to read"), result);
+		return -1;
+	}
+
+	return 0;
 }
 
 static int
@@ -278,60 +343,32 @@ static int
 vips_foreign_load_dcraw_header(VipsForeignLoad *load)
 {
 	VipsForeignLoadDcRaw *raw = (VipsForeignLoadDcRaw *) load;
-	VipsObjectClass *class = VIPS_OBJECT_GET_CLASS(raw);
 
-	int result;
-
-	raw->raw_processor = libraw_init(0);
-	if (!raw->raw_processor) {
-		vips_error(class->nickname, "%s", _("unable to initialize libraw"));
+	if (vips_foreign_load_dcraw_open(raw))
 		return -1;
-	}
 
-	if (raw->bitdepth != 8 &&
-		raw->bitdepth != 16) {
-		vips_error(class->nickname, "%s", _("bad bitdepth"));
+	/* Attach metadata before predicting the output size, since
+	 * libraw_adjust_sizes_info_only() will change things like orientation as
+	 * well.
+	 */
+	if (vips_foreign_load_dcraw_set_metadata(raw, load->out))
 		return -1;
-	}
-	raw->raw_processor->params.output_bps = raw->bitdepth;
 
-	/* Apply camera white balance.
+	/* Predict output image size. This will change eg. ->sizes.iheight etc.
+	 * and prevent _unpack() from running, sadly. Our _load() method will
+	 * reopen the file.
 	 */
-	raw->raw_processor->params.use_camera_wb = 1;
+	libraw_adjust_sizes_info_only(raw->raw_processor);
 
-	/* Don't autorotate, we set EXIF rotation later instead. If we enable
-	 * autorotate, then the image size reported during libraw_open_buffer()
-	 * may not match the decoded size.
+	/* All dcraw cameras will output 1 or 3 bands. colors here refers to the
+	 * number of filters on the sensor, so more than 1 means rgb output.
 	 */
-	raw->raw_processor->params.user_flip = 0;
-
-	/* We can use the libraw file interface for filename sources. This
-	 * interface can often read more metadata, since it can open secondary
-	 * files.
-	 */
-	if (vips_source_is_file(raw->source)) {
-		const char *filename =
-			vips_connection_filename(VIPS_CONNECTION(raw->source));
-
-		result = libraw_open_file(raw->raw_processor, filename);
-	}
-	else {
-		size_t length;
-		const void *data;
-
-		if (!(data = vips_source_map(raw->source, &length)))
-			return -1;
-		result = libraw_open_buffer(raw->raw_processor, data, length);
-	}
-	if (result != LIBRAW_SUCCESS) {
-		vips_foreign_load_dcraw_error(raw, _("unable to read"), result);
-		return -1;
-	}
+	int bands = raw->raw_processor->idata.colors > 1 ? 3 : 1;
 
 	vips_image_init_fields(load->out,
 		raw->raw_processor->sizes.iwidth,
 		raw->raw_processor->sizes.iheight,
-		raw->raw_processor->idata.colors,
+		bands,
 		raw->bitdepth > 8 ?
 			VIPS_FORMAT_USHORT : VIPS_FORMAT_UCHAR,
 		VIPS_CODING_NONE,
@@ -339,8 +376,12 @@ vips_foreign_load_dcraw_header(VipsForeignLoad *load)
 		1.0, 1.0);
 	load->out->Type = vips_image_guess_interpretation(load->out);
 
-	if (vips_foreign_load_dcraw_set_metadata(raw, load->out))
-		return -1;
+	/* This is no longer valid, since we have called
+	 * libraw_adjust_sizes_info_only() on it.
+	 *
+	 * We can close and possibly save a file descriptor.
+	 */
+	VIPS_FREEF(libraw_close, raw->raw_processor);
 
 	return 0;
 }
@@ -352,7 +393,11 @@ vips_foreign_load_dcraw_load(VipsForeignLoad *load)
 
 	int result;
 
-	g_assert(raw->raw_processor);
+	/* We must reopen, since libraw_adjust_sizes_info_only() will prevent
+	 * unpacking from working.
+	 */
+	if (vips_foreign_load_dcraw_open(raw))
+		return -1;
 
 	result = libraw_unpack(raw->raw_processor);
 	if (result != LIBRAW_SUCCESS) {
@@ -435,10 +480,17 @@ vips_foreign_load_dcraw_class_init(VipsForeignLoadDcRawClass *class)
 
 	VIPS_ARG_INT(class, "bitdepth", 12,
 		_("Bit depth"),
-		_("Number of bits per pixel"),
+		_("Number of bits to decode to"),
 		VIPS_ARGUMENT_OPTIONAL_INPUT,
 		G_STRUCT_OFFSET(VipsForeignLoadDcRaw, bitdepth),
 		8, 16, 8);
+
+	VIPS_ARG_BOOL(class, "half_size", 13,
+		_("Half-size"),
+		_("Decode image at half size"),
+		VIPS_ARGUMENT_OPTIONAL_INPUT,
+		G_STRUCT_OFFSET(VipsForeignLoadDcRaw, half_size),
+		FALSE);
 
 }
 
@@ -664,8 +716,15 @@ vips_foreign_load_dcraw_buffer_init(VipsForeignLoadDcRawBuffer *buffer)
  * grayscale image suitable for further processing. It attaches XMP and ICC
  * metadata, if present.
  *
+ * Set @half_size to decode at half-size. This can be much faster, though of
+ * course the image is smaller.
+ *
+ * Set @bit_depth to control the number of bits to decode to. Either 8 or 16,
+ * default 8,
+ *
  * ::: tip "Optional arguments"
- *     * @bitdepth: `gint`, load as 8 or 16 bit data
+ *     * @bitdepth: `gint`, number of bits to decode to
+ *     * @half_size: `gboolean`, decode at half-size
  *
  * Returns: 0 on success, -1 on error.
  */
@@ -691,7 +750,8 @@ vips_dcrawload(const char *filename, VipsImage **out, ...)
  * Exactly as [ctor@Image.dcrawload], but read from a source.
  *
  * ::: tip "Optional arguments"
- *     * @bitdepth: `gint`, load as 8 or 16 bit data
+ *     * @bitdepth: `gint`, number of bits to decode to
+ *     * @half_size: `gboolean`, decode at half-size
  *
  * ::: seealso
  *     [ctor@Image.dcrawload].
@@ -721,7 +781,8 @@ vips_dcrawload_source(VipsSource *source, VipsImage **out, ...)
  * Exactly as [ctor@Image.dcrawload], but read from a buffer.
  *
  * ::: tip "Optional arguments"
- *     * @bitdepth: `gint`, load as 8 or 16 bit data
+ *     * @bitdepth: `gint`, number of bits to decode to
+ *     * @half_size: `gboolean`, decode at half-size
  *
  * ::: seealso
  *     [ctor@Image.dcrawload].

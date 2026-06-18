@@ -132,6 +132,12 @@ static VipsBandFormat bandfmt_jpeg[10] = {
 	/* Promotion: */ UC, UC, UC, UC, UC, UC, UC, UC, UC, UC
 };
 
+#ifdef HAVE_UHDR
+static const gboolean have_uhdr = TRUE;
+#else
+static const gboolean have_uhdr = FALSE;
+#endif
+
 static int
 vips_foreign_save_jpeg_build(VipsObject *object)
 {
@@ -148,9 +154,10 @@ vips_foreign_save_jpeg_build(VipsObject *object)
 		jpeg->subsample_mode = jpeg->no_subsample ?
 			VIPS_FOREIGN_SUBSAMPLE_OFF : VIPS_FOREIGN_SUBSAMPLE_AUTO;
 
-	if (vips_image_get_typeof(save->ready, "gainmap-data") ||
-		save->ready->Type == VIPS_INTERPRETATION_scRGB ||
-		vips__image_is_cicp_hdr(save->ready)) {
+	if (have_uhdr &&
+		(vips_image_get_typeof(save->ready, "gainmap-data") ||
+		 save->ready->Type == VIPS_INTERPRETATION_scRGB ||
+		 vips__image_is_cicp_hdr(save->ready))) {
 		/* Pass on to uhdrsave.
 		 */
 		if (vips_uhdrsave_target(save->ready, jpeg->target,
@@ -307,14 +314,13 @@ vips_foreign_save_jpeg_target_build(VipsObject *object)
 	VipsForeignSaveJpeg *jpeg = (VipsForeignSaveJpeg *) object;
 	VipsForeignSaveJpegTarget *target = (VipsForeignSaveJpegTarget *) object;
 
-	jpeg->target = target->target;
-	g_object_ref(jpeg->target);
+	if (target->target) {
+		jpeg->target = target->target;
+		g_object_ref(jpeg->target);
+	}
 
-	if (VIPS_OBJECT_CLASS(vips_foreign_save_jpeg_target_parent_class)
-			->build(object))
-		return -1;
-
-	return 0;
+	return VIPS_OBJECT_CLASS(vips_foreign_save_jpeg_target_parent_class)
+		->build(object);
 }
 
 static void
@@ -363,14 +369,12 @@ vips_foreign_save_jpeg_file_build(VipsObject *object)
 	VipsForeignSaveJpeg *jpeg = (VipsForeignSaveJpeg *) object;
 	VipsForeignSaveJpegFile *file = (VipsForeignSaveJpegFile *) object;
 
-	if (!(jpeg->target = vips_target_new_to_file(file->filename)))
+	if (file->filename &&
+		!(jpeg->target = vips_target_new_to_file(file->filename)))
 		return -1;
 
-	if (VIPS_OBJECT_CLASS(vips_foreign_save_jpeg_file_parent_class)
-			->build(object))
-		return -1;
-
-	return 0;
+	return VIPS_OBJECT_CLASS(vips_foreign_save_jpeg_file_parent_class)
+		->build(object);
 }
 
 static void
@@ -552,17 +556,17 @@ vips_foreign_save_jpeg_mime_init(VipsForeignSaveJpegMime *mime)
  * If @quant_table is set and the version of libjpeg supports it
  * (e.g. mozjpeg >= 3.0) it selects the quantization table to use:
  *
- * - 0 — Tables from JPEG Annex K (vips and libjpeg default)
- * - 1 — Flat table
- * - 2 — Table tuned for MSSIM on Kodak image set
- * - 3 — Table from ImageMagick by N. Robidoux (current mozjpeg default)
- * - 4 — Table tuned for PSNR-HVS-M on Kodak image set
- * - 5 — Table from Relevance of Human Vision to JPEG-DCT Compression (1992)
- * - 6 — Table from DCTune Perceptual Optimization of Compressed Dental
+ * - 0 - Tables from JPEG Annex K (vips and libjpeg default)
+ * - 1 - Flat table
+ * - 2 - Table tuned for MSSIM on Kodak image set
+ * - 3 - Table from ImageMagick by N. Robidoux (current mozjpeg default)
+ * - 4 - Table tuned for PSNR-HVS-M on Kodak image set
+ * - 5 - Table from Relevance of Human Vision to JPEG-DCT Compression (1992)
+ * - 6 - Table from DCTune Perceptual Optimization of Compressed Dental
  *   X-Rays (1997)
- * - 7 — Table from A Visual Detection Model for DCT Coefficient
+ * - 7 - Table from A Visual Detection Model for DCT Coefficient
  *   Quantization (1993)
- * - 8 — Table from An Improved Detection Model for DCT Coefficient
+ * - 8 - Table from An Improved Detection Model for DCT Coefficient
  *   Quantization (1993)
  *
  * Quantization table 0 is the default in vips and libjpeg(-turbo), but it
